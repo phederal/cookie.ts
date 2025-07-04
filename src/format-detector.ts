@@ -10,30 +10,62 @@ export class CookieFormatDetector {
 			return null;
 		}
 
-		// Проверяем все форматы и выбираем с наивысшим confidence
-		const jsonConfidence = this.detectJsonFormat(trimmed);
-		const setCookieConfidence = this.detectSetCookieFormat(trimmed);
-		const netscapeConfidence = this.detectNetscapeFormat(trimmed);
+		// Быстрая эвристика для определения наиболее вероятного формата
+		let bestFormat: CookieFormat;
+		let bestConfidence: number;
 
-		const results = [
-			{ format: CookieFormat.JSON, confidence: jsonConfidence },
-			{ format: CookieFormat.SET_COOKIE, confidence: setCookieConfidence },
-			{ format: CookieFormat.NETSCAPE, confidence: netscapeConfidence },
-		].filter((r) => r.confidence > 0);
+		// Проверяем в порядке вероятности
+		if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+			// Вероятно JSON
+			bestConfidence = this.detectJsonFormat(trimmed);
+			bestFormat = CookieFormat.JSON;
 
-		if (results.length === 0) {
-			return null;
+			// Если JSON уверенно детектирован, не проверяем остальные
+			if (bestConfidence >= 0.8) {
+				return {
+					format: bestFormat,
+					confidence: bestConfidence,
+					lines: [trimmed],
+				};
+			}
+		} else if (trimmed.includes('=') && !trimmed.includes('\t')) {
+			// Вероятно Set-Cookie
+			bestConfidence = this.detectSetCookieFormat(trimmed);
+			bestFormat = CookieFormat.SET_COOKIE;
+		} else {
+			// Вероятно Netscape
+			bestConfidence = this.detectNetscapeFormat(trimmed);
+			bestFormat = CookieFormat.NETSCAPE;
 		}
 
-		// Берем формат с максимальным confidence
-		const best = results.reduce((a, b) => (a.confidence > b.confidence ? a : b));
-		if (best.confidence < 0.7) {
+		// Проверяем другие форматы только если текущий не уверен
+		if (bestConfidence < 0.8) {
+			const jsonConfidence = bestFormat !== CookieFormat.JSON ? this.detectJsonFormat(trimmed) : bestConfidence;
+			const setCookieConfidence = bestFormat !== CookieFormat.SET_COOKIE ? this.detectSetCookieFormat(trimmed) : bestConfidence;
+			const netscapeConfidence = bestFormat !== CookieFormat.NETSCAPE ? this.detectNetscapeFormat(trimmed) : bestConfidence;
+
+			// Находим лучший без создания массивов
+			if (jsonConfidence > bestConfidence) {
+				bestConfidence = jsonConfidence;
+				bestFormat = CookieFormat.JSON;
+			}
+			if (setCookieConfidence > bestConfidence) {
+				bestConfidence = setCookieConfidence;
+				bestFormat = CookieFormat.SET_COOKIE;
+			}
+			if (netscapeConfidence > bestConfidence) {
+				bestConfidence = netscapeConfidence;
+				bestFormat = CookieFormat.NETSCAPE;
+			}
+		}
+
+		if (bestConfidence < 0.7) {
 			return null;
 		}
 
 		return {
-			format: best.format,
-			confidence: best.confidence,
+			format: bestFormat,
+			confidence: bestConfidence,
 			lines: [trimmed],
 		};
 	}
@@ -48,10 +80,11 @@ export class CookieFormatDetector {
 		let confidence = 0.3;
 
 		// Required RFC 6265 fields
-		const hasName = line.includes('"name":');
-		const hasValue = line.includes('"value":');
+		let requiredCount = 0;
+		if (line.includes('"name":')) requiredCount++;
+		if (line.includes('"value":')) requiredCount++;
 
-		if (hasName && hasValue) {
+		if (requiredCount === 2) {
 			confidence += 0.3;
 		}
 
@@ -84,20 +117,38 @@ export class CookieFormatDetector {
 	}
 
 	private static detectSetCookieFormat(line: string): number {
-		// Должно содержать name=value в начале
-		if (!/^[^=\s]+=[^;]*/.test(line)) {
+		// Быстрая проверка на name=value без regex
+		const equalIndex = line.indexOf('=');
+		if (equalIndex === -1 || equalIndex === 0) {
+			return 0;
+		}
+
+		// Проверяем что перед = нет пробелов и точек с запятой
+		const nameChar = line.charCodeAt(equalIndex - 1);
+		if (nameChar === 32 || nameChar === 59) {
+			// check space or semicolon
 			return 0;
 		}
 
 		let confidence = 0.3; // базовый за name=value
 
-		// Проверяем наличие атрибутов cookie
-		const attributes = ['path=', 'domain=', 'expires=', 'max-age=', 'secure', 'httponly', 'samesite='];
-		const foundAttributes = attributes.filter((attr) => line.toLowerCase().includes(attr.toLowerCase()));
+		// Создаем lowercase версию один раз
+		const lowerLine = line.toLowerCase();
 
-		confidence += foundAttributes.length * 0.1;
+		// Прямые проверки атрибутов без массивов
+		let attributeCount = 0;
 
-		// Разделители точка-с-запятой
+		if (lowerLine.includes('path=')) attributeCount++;
+		if (lowerLine.includes('domain=')) attributeCount++;
+		if (lowerLine.includes('expires=')) attributeCount++;
+		if (lowerLine.includes('max-age=')) attributeCount++;
+		if (lowerLine.includes('secure')) attributeCount++;
+		if (lowerLine.includes('httponly')) attributeCount++;
+		if (lowerLine.includes('samesite=')) attributeCount++;
+
+		confidence += attributeCount * 0.1;
+
+		// Проверка на точку с запятой
 		if (line.includes(';')) {
 			confidence += 0.2;
 		}
@@ -106,32 +157,88 @@ export class CookieFormatDetector {
 	}
 
 	private static detectNetscapeFormat(line: string): number {
-		// Разделяем по табам и пробелам (любое количество)
-		const parts = line.split(/[\t\s]+/).filter((part) => part.length > 0);
+		let partCount = 1;
+		let hasTab = false;
+
+		for (let i = 0; i < line.length; i++) {
+			const char = line.charCodeAt(i);
+			if (char === 9 || char === 32) {
+				// tab or space
+				if (char === 9) hasTab = true;
+				// Пропускаем последовательные разделители
+				while (i + 1 < line.length && (line.charCodeAt(i + 1) === 9 || line.charCodeAt(i + 1) === 32)) {
+					i++;
+				}
+				if (i + 1 < line.length) partCount++;
+			}
+		}
 
 		// Netscape формат: domain includeSubdomains path secure expires name value
-		if (parts.length < 7) {
+		if (partCount < 7) {
 			return 0;
 		}
 
 		let confidence = 0.2; // базовый за количество полей
 
-		// Проверяем домен (первое поле)
+		// Бонус за табы (характерно для Netscape)
+		if (hasTab) {
+			confidence += 0.1;
+		}
+
+		// Находим части без создания массива
+		const parts: string[] = [];
+		let start = 0;
+
+		for (let i = 0; i <= line.length; i++) {
+			const char = i < line.length ? line.charCodeAt(i) : 0;
+			if (char === 9 || char === 32 || i === line.length) {
+				// tab, space, or end
+				if (i > start) {
+					parts.push(line.substring(start, i));
+				}
+				// Пропускаем разделители
+				while (i + 1 < line.length && (line.charCodeAt(i + 1) === 9 || line.charCodeAt(i + 1) === 32)) {
+					i++;
+				}
+				start = i + 1;
+			}
+		}
+
+		if (parts.length < 7) {
+			return 0;
+		}
+
+		// Проверяем домен (первое поле) без regex
 		const domain = parts[0]!;
-		if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(domain) || domain.startsWith('.')) {
+		if (domain.startsWith('.') || (domain.includes('.') && domain.length > 3)) {
+			// Быстрая проверка: есть точка и достаточная длина
 			confidence += 0.3;
 		}
 
-		// Проверяем булевы поля (includeSubdomains, secure)
-		if (['TRUE', 'FALSE'].includes(parts[1]!.toUpperCase())) {
-			confidence += 0.15;
-		}
-		if (['TRUE', 'FALSE'].includes(parts[3]!.toUpperCase())) {
+		// Проверяем булевы поля без toUpperCase и массивов
+		const field1 = parts[1]!;
+		if (field1 === 'TRUE' || field1 === 'FALSE' || field1 === 'true' || field1 === 'false') {
 			confidence += 0.15;
 		}
 
-		// Проверяем expires (число)
-		if (/^\d+$/.test(parts[4]!)) {
+		const field3 = parts[3]!;
+		if (field3 === 'TRUE' || field3 === 'FALSE' || field3 === 'true' || field3 === 'false') {
+			confidence += 0.15;
+		}
+
+		// Проверяем expires (число) без regex
+		const expires = parts[4]!;
+		let isNumber = expires.length > 0;
+		for (let i = 0; i < expires.length; i++) {
+			const char = expires.charCodeAt(i);
+			if (char < 48 || char > 57) {
+				// не цифра 0-9
+				isNumber = false;
+				break;
+			}
+		}
+
+		if (isNumber) {
 			confidence += 0.2;
 		}
 
