@@ -54,15 +54,15 @@ domain.com    TRUE    /    FALSE    1782911632    name    value
 
 ```json
 [
-	{
-		"domain": ".example.com",
-		"includeSubdomains": true,
-		"path": "/",
-		"secure": false,
-		"expires": 1782911632,
-		"name": "sessionid",
-		"value": "token123"
-	}
+  {
+    "domain": ".example.com",
+    "includeSubdomains": true,
+    "path": "/",
+    "secure": false,
+    "expires": 1782911632,
+    "name": "sessionid",
+    "value": "token123"
+  }
 ]
 ```
 
@@ -74,7 +74,7 @@ domain.com    TRUE    /    FALSE    1782911632    name    value
 
 **Параметры:**
 
--   `content` - содержимое файла или строка с cookie
+- `content` - содержимое файла или строка с cookie
 
 **Возвращает:**
 
@@ -98,16 +98,16 @@ domain.com    TRUE    /    FALSE    1782911632    name    value
 
 ```typescript
 interface Cookie {
-	name: string;
-	value: string;
-	domain: string;
-	path?: string;
-	expires?: number; // unix timestamp
-	maxAge?: number; // секунды
-	secure?: boolean;
-	httpOnly?: boolean;
-	sameSite?: 'Strict' | 'Lax' | 'None';
-	includeSubdomains?: boolean; // для Netscape
+  name: string;
+  value: string;
+  domain: string;
+  path?: string;
+  expires?: number; // unix timestamp
+  maxAge?: number; // секунды
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+  includeSubdomains?: boolean; // для Netscape
 }
 ```
 
@@ -120,7 +120,7 @@ const fileContent = await Bun.file('./cookies.txt').text();
 const result = CookieParser.parse(fileContent);
 
 for (const cookie of result.cookies) {
-	console.log(`${cookie.name}=${cookie.value} [${cookie.domain}]`);
+  console.log(`${cookie.name}=${cookie.value} [${cookie.domain}]`);
 }
 ```
 
@@ -130,8 +130,8 @@ for (const cookie of result.cookies) {
 const result = CookieParser.parse(invalidContent);
 
 if (result.errors.length > 0) {
-	console.error('Ошибки валидации:');
-	result.errors.forEach((error) => console.error(`- ${error}`));
+  console.error('Ошибки валидации:');
+  result.errors.forEach((error) => console.error(`- ${error}`));
 }
 ```
 
@@ -150,8 +150,8 @@ import { PerformanceOptimizer } from 'cookie-parser';
 
 // Потоковая обработка чанками
 const result = PerformanceOptimizer.parseStreamOptimized(
-	largeContent,
-	10000, // размер чанка
+  largeContent,
+  10000, // размер чанка
 );
 
 // Бенчмарк
@@ -172,10 +172,10 @@ runTests(); // Запуск встроенных тестов
 
 Парсер строго следует RFC 6265:
 
--   ❌ Отклоняет cookie с недопустимыми символами в `name`
--   ❌ Проверяет корректность `domain` и `path`
--   ❌ Валидирует значения `expires` и `maxAge`
--   ✅ Поддерживает URL-кодированные значения
+- ❌ Отклоняет cookie с недопустимыми символами в `name`
+- ❌ Проверяет корректность `domain` и `path`
+- ❌ Валидирует значения `expires` и `maxAge`
+- ✅ Поддерживает URL-кодированные значения
 
 ## Лицензия
 
