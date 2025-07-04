@@ -46,16 +46,51 @@ export class CookieFormatDetector {
 
 		let confidence = 0.3; // базовый за JSON структуру
 
-		// Проверяем наличие cookie-специфичных полей
-		// const cookieFields = ['name', 'value', 'domain', 'path', 'expires'];
-		const cookieFields = ['"domain":', '"name":', '"value":', '"path":', '"expires":', '"includeSubdomains":'];
-		const foundFields = cookieFields.filter((field) => line.includes(field));
-		confidence += foundFields.length * 0.1;
+		const requiredFields = [
+			// Required RFC 6265 fields
+			'"name":',
+			'"value":',
+		];
+
+		const importantFields = [
+			// Important RFC 6265 fields
+			'"domain":',
+			'"path":',
+			'"expires":',
+		];
+
+		const optionalFields = [
+			// Optional, RFC 6265
+			'"secure":',
+			'"maxAge":',
+			'"max-age":',
+			'"httpOnly":',
+			'"httponly":',
+			'"SameSite":',
+			'"samesite":',
+
+			// Chrome extensions
+			'"partitioned":',
+			'"priority":',
+			'"includeSubdomains":',
+			'"includeSubDomains":',
+			'"session":',
+		];
+
+		const required = requiredFields.filter((field) => line.includes(field));
+		const important = importantFields.filter((field) => line.includes(field));
+		const optional = optionalFields.filter((field) => line.includes(field));
 
 		// Если найдены все основные поля cookie
-		if (foundFields.length >= 4) {
+		if (required.length === requiredFields.length) {
 			confidence += 0.3;
 		}
+
+		// Важные поля дают больше уверенности
+		confidence += important.length * 0.1;
+
+		// Дополнительные поля
+		confidence += optional.length * 0.05;
 
 		return Math.min(confidence, 1);
 	}
