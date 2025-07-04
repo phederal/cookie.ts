@@ -44,53 +44,41 @@ export class CookieFormatDetector {
 			return 0;
 		}
 
-		let confidence = 0.3; // базовый за JSON структуру
+		// because json structure
+		let confidence = 0.3;
 
-		const requiredFields = [
-			// Required RFC 6265 fields
-			'"name":',
-			'"value":',
-		];
+		// Required RFC 6265 fields
+		const hasName = line.includes('"name":');
+		const hasValue = line.includes('"value":');
 
-		const importantFields = [
-			// Important RFC 6265 fields
-			'"domain":',
-			'"path":',
-			'"expires":',
-		];
-
-		const optionalFields = [
-			// Optional, RFC 6265
-			'"secure":',
-			'"maxAge":',
-			'"max-age":',
-			'"httpOnly":',
-			'"httponly":',
-			'"SameSite":',
-			'"samesite":',
-
-			// Chrome extensions
-			'"partitioned":',
-			'"priority":',
-			'"includeSubdomains":',
-			'"includeSubDomains":',
-			'"session":',
-		];
-
-		const required = requiredFields.filter((field) => line.includes(field));
-		const important = importantFields.filter((field) => line.includes(field));
-		const optional = optionalFields.filter((field) => line.includes(field));
-
-		// Если найдены все основные поля cookie
-		if (required.length === requiredFields.length) {
+		if (hasName && hasValue) {
 			confidence += 0.3;
 		}
 
-		// Важные поля дают больше уверенности
-		confidence += important.length * 0.1;
+		// Important RFC 6265 fields
+		let importantCount = 0;
+		if (line.includes('"domain":')) importantCount++;
+		if (line.includes('"path":')) importantCount++;
+		if (line.includes('"expires":')) importantCount++;
 
-		// Дополнительные поля
-		confidence += optional.length * 0.05;
+		confidence += importantCount * 0.1;
+
+		// Optional fields
+		let optionalCount = 0;
+		if (line.includes('"secure":')) optionalCount++;
+		if (line.includes('"maxAge":')) optionalCount++;
+		if (line.includes('"max-age":')) optionalCount++;
+		if (line.includes('"httpOnly":')) optionalCount++;
+		if (line.includes('"httponly":')) optionalCount++;
+		if (line.includes('"SameSite":')) optionalCount++;
+		if (line.includes('"samesite":')) optionalCount++;
+		if (line.includes('"partitioned":')) optionalCount++;
+		if (line.includes('"priority":')) optionalCount++;
+		if (line.includes('"includeSubdomains":')) optionalCount++;
+		if (line.includes('"includeSubDomains":')) optionalCount++;
+		if (line.includes('"session":')) optionalCount++;
+
+		confidence += optionalCount * 0.05;
 
 		return Math.min(confidence, 1);
 	}
