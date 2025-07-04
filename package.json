@@ -1,0 +1,12 @@
+{
+	"name": "cookie.ts",
+	"description": "Cookie parser for all formats. Json, Netspace, SetCookie, String.",
+	"module": "src/index.ts",
+	"type": "module",
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
+}
