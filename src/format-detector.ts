@@ -160,17 +160,15 @@ export class CookieFormatDetector {
 	 */
 	private static isNetscapeStructure(structure: any): boolean {
 		// Netscape: ровно 7 полей, разделенных табами или пробелами
-		return structure.fieldCount === 7 && structure.totalSeparators >= 6 && structure.equalCount <= 1; // может быть = в значении cookie
+		return structure.fieldCount === 7 && structure.totalSeparators >= 6;
 	}
 
 	/**
 	 * Проверяет соответствие структуры SetCookie формату
 	 */
 	private static isSetCookieStructure(structure: any, line: string): boolean {
-		// SetCookie должен иметь name=value
 		if (structure.equalCount === 0) return false;
 
-		// Проверяем что первая часть до = - валидное имя cookie
 		const firstEqualIndex = line.indexOf('=');
 		if (firstEqualIndex <= 0) return false;
 
@@ -179,19 +177,29 @@ export class CookieFormatDetector {
 			return false;
 		}
 
-		// Исключаем строки которые выглядят как Netscape формат:
-		// - 7+ полей через систематические разделители (tab/space)
-		// - содержат TRUE/FALSE как отдельные поля
-		if (structure.fieldCount >= 7 && structure.totalSeparators >= 6) {
-			// Дополнительная проверка: содержит ли TRUE/FALSE как отдельные слова
-			const upperLine = line.toUpperCase();
-			const hasBooleanFields =
-				/\s(TRUE|FALSE)(?=\s)/gi.test(line) || /(?<=\s)(TRUE|FALSE)\s/gi.test(line) || /^(TRUE|FALSE)\s/gi.test(line) || /\s(TRUE|FALSE)$/gi.test(line);
+		// ИСПРАВЛЕНИЕ: Более строгая проверка Netscape паттернов (включая неполные)
+		if (structure.fieldCount >= 5 && structure.totalSeparators >= 4) {
+			// Изменено с 6/5 на 5/4
+			const fields = this.parseNetscapeFields(line);
 
-			if (hasBooleanFields) return false;
+			// Если есть boolean паттерн в позициях 1 и 3 - это Netscape (даже неполный)
+			if (fields.length >= 4 && this.hasNetscapeBooleanPattern(fields)) {
+				return false; // Отклоняем как SetCookie
+			}
 		}
 
 		return true;
+	}
+
+	private static hasNetscapeBooleanPattern(fields: string[]): boolean {
+		// Для корректного Netscape нужны позиции 1 и 3 (includeSubdomains и secure)
+		if (fields.length < 4) return false;
+
+		const field2 = fields[1]?.toUpperCase(); // includeSubdomains
+		const field4 = fields[3]?.toUpperCase(); // secure
+
+		// Оба поля должны быть boolean значениями
+		return (field2 === 'TRUE' || field2 === 'FALSE') && (field4 === 'TRUE' || field4 === 'FALSE');
 	}
 
 	/**
@@ -253,22 +261,26 @@ export class CookieFormatDetector {
 	 * Валидация Netscape формата
 	 */
 	private static validateNetscapeFormat(line: string): FormatDetectionResult | null {
-		// Убираем #HttpOnly_ префикс для валидации
 		const cleanLine = line.startsWith('#HttpOnly_') ? line.slice(10) : line;
 		const fields = this.parseNetscapeFields(cleanLine);
 
+		// КРИТИЧНО: Строго 7 полей, не больше, не меньше
 		if (fields.length !== 7) return null;
 
 		const [domain, includeSubdomains, path, secure, expires, name, value] = fields;
 
-		// Валидация полей
+		// Проверка что все поля присутствуют (не undefined и не пустые)
+		if (!domain || !includeSubdomains || !path || !secure || expires === undefined || !name || value === undefined) {
+			return null;
+		}
+
+		// Валидация типов полей
 		if (!this.isValidDomain(domain)) return null;
 		if (!this.isValidBoolean(includeSubdomains)) return null;
 		if (!this.isValidPath(path)) return null;
 		if (!this.isValidBoolean(secure)) return null;
 		if (!this.isValidTimestamp(expires)) return null;
 		if (!this.isValidCookieName(name)) return null;
-		// value может быть любым
 
 		return {
 			format: CookieFormat.NETSCAPE,
@@ -370,7 +382,6 @@ export class CookieFormatDetector {
 	 * Проверяет наличие множественных name=value пар в атрибутах
 	 */
 	private static hasMultipleNameValuePairs(attributes: string): boolean {
-		// Известные SetCookie атрибуты (case-insensitive)
 		const knownAttributes = ['domain', 'path', 'expires', 'max-age', 'samesite', 'httponly', 'secure', 'partitioned', 'priority'];
 
 		const parts = attributes.split(';');
@@ -378,12 +389,12 @@ export class CookieFormatDetector {
 		for (const part of parts) {
 			const trimmed = part.trim();
 			if (trimmed.includes('=')) {
-				const [name] = trimmed.split('=', 1);
-				const attrName = name.trim().toLowerCase();
+				const equalIndex = trimmed.indexOf('=');
+				const name = trimmed.slice(0, equalIndex).trim().toLowerCase();
 
-				// Если найден атрибут с = который не является известным SetCookie атрибутом
-				if (!knownAttributes.includes(attrName)) {
-					return true; // это дополнительная name=value пара, не атрибут
+				// ИСПРАВЛЕНИЕ: Expires может содержать даты с запятыми - это нормально
+				if (!knownAttributes.includes(name)) {
+					return true;
 				}
 			}
 		}
