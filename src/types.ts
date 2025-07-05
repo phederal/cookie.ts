@@ -50,7 +50,6 @@ export interface ValidationError {
 
 export interface FormatDetectionResult {
 	format: CookieFormat;
-	confidence: number; // 0-1
 	lines: string[];
 }
 
