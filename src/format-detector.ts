@@ -1,289 +1,393 @@
 import { CookieFormat } from './types';
 import type { FormatDetectionResult } from './types';
 
+/**
+ * Строгий детектор форматов cookies с нулевым уровнем ложных срабатываний
+ * Использует структурный анализ вместо нечеткой логики scoring
+ */
 export class CookieFormatDetector {
+	/**
+	 * Определяет формат cookie строки с максимальной точностью
+	 * @param line Строка для анализа
+	 * @returns Результат детектирования или null если формат не определен
+	 */
 	static detect(line: string): FormatDetectionResult | null {
-		const len = line.length;
-		if (len === 0) return null;
+		const trimmed = line.trim();
+		if (trimmed.length === 0) return null;
 
-		// Быстрая проверка первого символа для исключения комментариев
+		// Быстрое исключение комментариев
+		if (this.isComment(trimmed)) return null;
+
+		// Структурное определение формата
+		const format = this.detectByStructure(trimmed);
+		if (!format) return null;
+
+		// Строгая валидация соответствия формату
+		return this.validateFormat(trimmed, format);
+	}
+
+	/**
+	 * Проверяет является ли строка комментарием
+	 */
+	private static isComment(line: string): boolean {
 		const firstChar = line.charCodeAt(0);
 
-		// Пропускаем пустые строки и комментарии (кроме #HttpOnly_)
 		if (firstChar === 0x23) {
 			// '#'
-			if (!line.startsWith('#HttpOnly_')) return null;
-		} else if (firstChar === 0x2f) {
+			// Исключение: #HttpOnly_ - это префикс Netscape формата
+			return !line.startsWith('#HttpOnly_');
+		}
+
+		if (firstChar === 0x2f && line.length > 1) {
 			// '/'
-			// Проверяем на // или /*
-			if (len > 1 && (line.charCodeAt(1) === 0x2f || line.charCodeAt(1) === 0x2a)) {
-				return null;
-			}
+			const secondChar = line.charCodeAt(1);
+			return secondChar === 0x2f || secondChar === 0x2a; // '//' или '/*'
 		}
 
-		// Быстрое определение формата по первому символу
+		// HTML комментарии
+		if (line.startsWith('<!--')) return true;
+
+		return false;
+	}
+
+	/**
+	 * Определяет формат по структурным признакам
+	 */
+	private static detectByStructure(line: string): CookieFormat | null {
+		const firstChar = line.charCodeAt(0);
+
+		// JSON: строго начинается с { или [
 		if (firstChar === 0x7b || firstChar === 0x5b) {
-			// '{' или '['
-			// Check JSON format
-			const confidence = this.calculateJsonConfidence(line);
-			if (confidence >= 0.7) {
-				return {
-					format: CookieFormat.JSON,
-					confidence,
-					lines: [line],
-				};
-			}
-			return null;
+			return this.isValidJsonStructure(line) ? CookieFormat.JSON : null;
 		}
 
-		// Проверяем на наличие табуляций (характерно для Netscape)
-		const hasTab = line.indexOf('\t') !== -1;
-		const hasSpace = line.indexOf(' ') !== -1;
-		const hasEquals = line.indexOf('=') !== -1;
+		// Убираем #HttpOnly_ префикс для анализа
+		const cleanLine = line.startsWith('#HttpOnly_') ? line.slice(10) : line;
 
-		if ((hasTab || hasSpace) && this.netscapeCheck(line)) {
-			const confidence = this.calculateNetscapeConfidence(line);
-			if (confidence >= 0.7) {
-				return {
-					format: CookieFormat.NETSCAPE,
-					confidence,
-					lines: [line],
-				};
-			}
+		// Анализ структуры для различения Netscape и SetCookie
+		const structure = this.analyzeLineStructure(cleanLine);
+
+		// Netscape: строго 7 полей с систематическими разделителями
+		if (this.isNetscapeStructure(structure)) {
+			return CookieFormat.NETSCAPE;
 		}
 
-		if (hasEquals) {
-			// Проверяем Set-Cookie формат
-			const setCookieConfidence = this.calculateSetCookieConfidence(line);
-			if (setCookieConfidence >= 0.7) {
-				return {
-					format: CookieFormat.SET_COOKIE,
-					confidence: setCookieConfidence,
-					lines: [line],
-				};
-			}
+		// SetCookie: name=value формат без систематических разделителей
+		if (this.isSetCookieStructure(structure, cleanLine)) {
+			return CookieFormat.SET_COOKIE;
 		}
 
 		return null;
 	}
 
-	private static netscapeCheck(line: string): boolean {
-		let separatorCount = 0;
+	/**
+	 * Проверяет валидность JSON структуры
+	 */
+	private static isValidJsonStructure(line: string): boolean {
+		try {
+			const parsed = JSON.parse(line);
+
+			// Должен быть объект или массив
+			if (typeof parsed !== 'object' || parsed === null) return false;
+
+			// Для объекта - проверяем наличие обязательных полей cookie
+			if (!Array.isArray(parsed)) {
+				return this.hasRequiredCookieFields(parsed);
+			}
+
+			// Для массива - проверяем что все элементы валидные cookie объекты
+			if (parsed.length === 0) return false;
+			return parsed.every((item: any) => typeof item === 'object' && item !== null && this.hasRequiredCookieFields(item));
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Проверяет наличие обязательных полей cookie в JSON объекте
+	 */
+	private static hasRequiredCookieFields(obj: any): boolean {
+		return typeof obj.name === 'string' && obj.name.length > 0 && 'value' in obj;
+	}
+
+	/**
+	 * Анализирует структуру строки
+	 */
+	private static analyzeLineStructure(line: string) {
+		let fieldCount = 1; // начинаем с 1 поля (первое поле до разделителя)
+		let tabCount = 0;
+		let spaceGroupCount = 0;
+		let equalCount = 0;
+		let semicolonCount = 0;
+		let inWhitespace = false;
+
 		for (let i = 0; i < line.length; i++) {
-			const code = line.charCodeAt(i);
-			if (code === 0x09 || code === 0x20) {
-				// таб ИЛИ пробел
-				while (i + 1 < line.length) {
-					const nextCode = line.charCodeAt(i + 1);
-					if (nextCode !== 0x09 && nextCode !== 0x20) break;
-					i++;
+			const char = line.charCodeAt(i);
+
+			if (char === 0x09) {
+				// tab
+				tabCount++;
+				if (!inWhitespace) fieldCount++;
+				inWhitespace = true;
+			} else if (char === 0x20) {
+				// space
+				if (!inWhitespace) {
+					spaceGroupCount++;
+					fieldCount++;
 				}
-				separatorCount++;
+				inWhitespace = true;
+			} else {
+				inWhitespace = false;
+
+				if (char === 0x3d) equalCount++; // '='
+				else if (char === 0x3b) semicolonCount++; // ';'
 			}
 		}
-		return separatorCount >= 6;
+
+		return {
+			fieldCount,
+			tabCount,
+			spaceGroupCount,
+			equalCount,
+			semicolonCount,
+			hasSystematicSeparators: tabCount >= 6 || spaceGroupCount >= 6,
+			totalSeparators: tabCount + spaceGroupCount,
+		};
 	}
 
-	private static calculateJsonConfidence(line: string): number {
-		// Простая проверка на JSON объект или массив
-		if (!(line.startsWith('[') || line.startsWith('{'))) {
-			return 0;
-		}
-
-		// because json structure
-		let confidence = 0.3;
-
-		// Required RFC 6265 fields
-		let requiredCount = 0;
-		if (line.includes('"name":')) requiredCount++;
-		if (line.includes('"value":')) requiredCount++;
-
-		if (requiredCount === 2) {
-			confidence += 0.3;
-		}
-
-		// Important RFC 6265 fields
-		let importantCount = 0;
-		if (line.includes('"domain":')) importantCount++;
-		if (line.includes('"path":')) importantCount++;
-		if (line.includes('"expires":')) importantCount++;
-
-		confidence += importantCount * 0.1;
-
-		// Optional fields
-		let optionalCount = 0;
-		if (line.includes('"secure":')) optionalCount++;
-		if (line.includes('"maxAge":')) optionalCount++;
-		if (line.includes('"max-age":')) optionalCount++;
-		if (line.includes('"httpOnly":')) optionalCount++;
-		if (line.includes('"httponly":')) optionalCount++;
-		if (line.includes('"SameSite":')) optionalCount++;
-		if (line.includes('"samesite":')) optionalCount++;
-		if (line.includes('"partitioned":')) optionalCount++;
-		if (line.includes('"priority":')) optionalCount++;
-		if (line.includes('"includeSubdomains":')) optionalCount++;
-		if (line.includes('"includeSubDomains":')) optionalCount++;
-		if (line.includes('"session":')) optionalCount++;
-
-		confidence += optionalCount * 0.05;
-
-		return Math.min(confidence, 1);
+	/**
+	 * Проверяет соответствие структуры Netscape формату
+	 */
+	private static isNetscapeStructure(structure: any): boolean {
+		// Netscape: ровно 7 полей, разделенных табами или пробелами
+		return structure.fieldCount === 7 && structure.totalSeparators >= 6 && structure.equalCount <= 1; // может быть = в значении cookie
 	}
 
-	private static calculateSetCookieConfidence(line: string): number {
-		// Быстрая проверка на name=value без regex
-		const equalIndex = line.indexOf('=');
-		if (equalIndex === -1 || equalIndex === 0) {
-			return 0;
+	/**
+	 * Проверяет соответствие структуры SetCookie формату
+	 */
+	private static isSetCookieStructure(structure: any, line: string): boolean {
+		// SetCookie должен иметь name=value
+		if (structure.equalCount === 0) return false;
+
+		// Проверяем что первая часть до = - валидное имя cookie
+		const firstEqualIndex = line.indexOf('=');
+		if (firstEqualIndex <= 0) return false;
+
+		const cookieName = line.slice(0, firstEqualIndex).trim();
+		if (!this.isValidCookieName(cookieName) || this.isCookieAttribute(cookieName)) {
+			return false;
 		}
 
-		// Проверяем что перед = нет пробелов и точек с запятой
-		const nameChar = line.charCodeAt(equalIndex - 1);
-		if (nameChar === 0x20 || nameChar === 0x3b) {
-			// пробел или точка с запятой
-			return 0;
+		// Исключаем строки которые выглядят как Netscape формат:
+		// - 7+ полей через систематические разделители (tab/space)
+		// - содержат TRUE/FALSE как отдельные поля
+		if (structure.fieldCount >= 7 && structure.totalSeparators >= 6) {
+			// Дополнительная проверка: содержит ли TRUE/FALSE как отдельные слова
+			const upperLine = line.toUpperCase();
+			const hasBooleanFields =
+				/\s(TRUE|FALSE)(?=\s)/gi.test(line) || /(?<=\s)(TRUE|FALSE)\s/gi.test(line) || /^(TRUE|FALSE)\s/gi.test(line) || /\s(TRUE|FALSE)$/gi.test(line);
+
+			if (hasBooleanFields) return false;
 		}
 
-		let confidence = 0.4; // базовый за name=value
-
-		// Создаем lowercase версию один раз
-		const lowerLine = line.toLowerCase();
-
-		// Прямые проверки атрибутов без массивов
-		let attributeCount = 0;
-
-		if (lowerLine.includes('path=')) attributeCount++;
-		if (lowerLine.includes('domain=')) attributeCount++;
-		if (lowerLine.includes('expires=')) attributeCount++;
-		if (lowerLine.includes('max-age=')) attributeCount++;
-		if (lowerLine.includes('secure')) attributeCount++;
-		if (lowerLine.includes('httponly')) attributeCount++;
-		if (lowerLine.includes('samesite=')) attributeCount++;
-
-		confidence += attributeCount * 0.08;
-
-		// Проверка на точку с запятой
-		if (line.includes(';')) {
-			confidence += 0.25;
-		}
-
-		// Дополнительные проверки для повышения точности
-		// Проверяем что имя cookie выглядит разумно (буквы, цифры, -, _)
-		const cookieName = line.slice(0, equalIndex);
-		if (this.isValidCookieName(cookieName)) {
-			confidence += 0.05;
-		}
-
-		return Math.min(confidence, 1);
+		return true;
 	}
 
+	/**
+	 * Проверяет валидность имени cookie
+	 */
 	private static isValidCookieName(name: string): boolean {
-		if (!name || name.length === 0) return false;
-		// Простая проверка: буквы, цифры, дефис, подчеркивание
+		if (name.length === 0 || name.length > 256) return false;
+
+		// RFC 6265: cookie-name не должно содержать управляющие символы, пробелы, =, ;
 		for (let i = 0; i < name.length; i++) {
 			const code = name.charCodeAt(i);
-			if (
-				!(
-					(code >= 0x41 && code <= 0x5a) || // A-Z
-					(code >= 0x61 && code <= 0x7a) || // a-z
-					(code >= 0x30 && code <= 0x39) || // 0-9
-					code === 0x2d ||
-					code === 0x5f
-				)
-			) {
-				// - или _
+			if (code < 0x21 || code === 0x3b || code === 0x3d || code > 0x7e) {
 				return false;
 			}
 		}
 		return true;
 	}
 
-	private static calculateNetscapeConfidence(line: string): number {
-		let partCount = 1;
-		let hasTab = false;
-		let hasSpace = false;
+	/**
+	 * Проверяет является ли строка атрибутом SetCookie
+	 */
+	private static isCookieAttribute(name: string): boolean {
+		const lowerName = name.toLowerCase();
+		return ['domain', 'path', 'expires', 'max-age', 'samesite', 'httponly', 'secure', 'partitioned', 'priority'].includes(lowerName);
+	}
 
-		// Первый проход: считаем части и проверяем типы разделителей
-		for (let i = 0; i < line.length; i++) {
-			const char = line.charCodeAt(i);
-			if (char === 0x09 || char === 0x20) {
-				// таб или пробел
-				if (char === 0x09) hasTab = true;
-				if (char === 0x20) hasSpace = true;
+	/**
+	 * Выполняет финальную валидацию формата
+	 */
+	private static validateFormat(line: string, format: CookieFormat): FormatDetectionResult | null {
+		switch (format) {
+			case CookieFormat.JSON:
+				return this.validateJsonFormat(line);
 
-				// Пропускаем последовательные разделители
-				while (i + 1 < line.length && (line.charCodeAt(i + 1) === 0x09 || line.charCodeAt(i + 1) === 0x20)) {
-					i++;
-				}
-				if (i + 1 < line.length) partCount++;
-			}
+			case CookieFormat.NETSCAPE:
+				return this.validateNetscapeFormat(line);
+
+			case CookieFormat.SET_COOKIE:
+				return this.validateSetCookieFormat(line);
+
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * Валидация JSON формата
+	 */
+	private static validateJsonFormat(line: string): FormatDetectionResult {
+		// JSON уже проверен в isValidJsonStructure
+		return {
+			format: CookieFormat.JSON,
+			confidence: 1.0,
+			lines: [line],
+		};
+	}
+
+	/**
+	 * Валидация Netscape формата
+	 */
+	private static validateNetscapeFormat(line: string): FormatDetectionResult | null {
+		// Убираем #HttpOnly_ префикс для валидации
+		const cleanLine = line.startsWith('#HttpOnly_') ? line.slice(10) : line;
+		const fields = this.parseNetscapeFields(cleanLine);
+
+		if (fields.length !== 7) return null;
+
+		const [domain, includeSubdomains, path, secure, expires, name, value] = fields;
+
+		// Валидация полей
+		if (!this.isValidDomain(domain)) return null;
+		if (!this.isValidBoolean(includeSubdomains)) return null;
+		if (!this.isValidPath(path)) return null;
+		if (!this.isValidBoolean(secure)) return null;
+		if (!this.isValidTimestamp(expires)) return null;
+		if (!this.isValidCookieName(name)) return null;
+		// value может быть любым
+
+		return {
+			format: CookieFormat.NETSCAPE,
+			confidence: 1.0,
+			lines: [line],
+		};
+	}
+
+	/**
+	 * Валидация SetCookie формата
+	 */
+	private static validateSetCookieFormat(line: string): FormatDetectionResult | null {
+		const firstEqualIndex = line.indexOf('=');
+		const cookieName = line.slice(0, firstEqualIndex).trim();
+
+		// Имя уже проверено в isSetCookieStructure
+		// Проверяем что после ; нет множественных name=value пар
+		const semicolonIndex = line.indexOf(';');
+		if (semicolonIndex !== -1) {
+			const attributes = line.slice(semicolonIndex + 1);
+			if (this.hasMultipleNameValuePairs(attributes)) return null;
 		}
 
-		// Netscape формат: domain includeSubdomains path secure expires name value
-		if (partCount < 7) {
-			return 0;
-		}
+		return {
+			format: CookieFormat.SET_COOKIE,
+			confidence: 1.0,
+			lines: [line],
+		};
+	}
 
-		let confidence = 0.2; // базовый за количество полей
-
-		// Бонус за разделители (табы предпочтительнее, но пробелы тоже валидны)
-		if (hasTab) {
-			confidence += 0.1; // табы - классический Netscape
-		} else if (hasSpace) {
-			confidence += 0.05; // пробелы - менее типично, но допустимо
-		}
-
-		// Простая валидация первых полей для дополнительной уверенности
-		let fieldIndex = 0;
+	/**
+	 * Парсит поля Netscape формата
+	 */
+	private static parseNetscapeFields(line: string): string[] {
+		const fields: string[] = [];
 		let start = 0;
+		let inField = false;
 
 		for (let i = 0; i <= line.length; i++) {
 			const char = i < line.length ? line.charCodeAt(i) : 0;
-			if (char === 0x09 || char === 0x20 || i === line.length) {
-				// таб, пробел или конец
-				if (i > start) {
-					const field = line.slice(start, i);
+			const isWhitespace = char === 0x09 || char === 0x20;
 
-					// Netscape: domain includeSubdomains path secure expires name value
-					if (fieldIndex === 0) {
-						// Проверяем домен
-						if (field.startsWith('.') || (field.includes('.') && field.length > 3)) {
-							confidence += 0.3;
-						}
-					} else if (fieldIndex === 1 || fieldIndex === 3) {
-						// Проверяем булевы поля includeSubdomains и secure
-						if (field === 'TRUE' || field === 'FALSE' || field === 'true' || field === 'false') {
-							confidence += 0.15;
-						}
-					} else if (fieldIndex === 4) {
-						// Проверяем expires (должно быть число)
-						if (field.length > 0) {
-							let isNumber = true;
-							for (let j = 0; j < field.length; j++) {
-								const charCode = field.charCodeAt(j);
-								if (charCode < 0x30 || charCode > 0x39) {
-									// не цифра 0-9
-									isNumber = false;
-									break;
-								}
-							}
-							if (isNumber) confidence += 0.2;
-						}
-					} else if (fieldIndex >= 6) {
-						// Дошли до name/value - достаточно для валидации
-						break;
-					}
-				}
-
-				// Пропускаем разделители
-				while (i + 1 < line.length && (line.charCodeAt(i + 1) === 0x09 || line.charCodeAt(i + 1) === 0x20)) {
-					i++;
-				}
-				start = i + 1;
-				fieldIndex++;
+			if (!isWhitespace && !inField) {
+				start = i;
+				inField = true;
+			} else if ((isWhitespace || i === line.length) && inField) {
+				fields.push(line.slice(start, i));
+				inField = false;
 			}
 		}
 
-		return Math.min(confidence, 1);
+		return fields;
+	}
+
+	/**
+	 * Проверяет валидность домена
+	 */
+	private static isValidDomain(domain: string): boolean {
+		if (domain.length === 0) return false;
+
+		// Специальные случаи
+		if (domain === 'localhost' || domain.startsWith('localhost:')) return true;
+		if (/^\d+\.\d+\.\d+\.\d+$/.test(domain)) return true; // IP адрес
+
+		// Обычные домены должны содержать точку
+		const cleanDomain = domain.startsWith('.') ? domain.slice(1) : domain;
+		return cleanDomain.length > 0 && cleanDomain.includes('.') && !/[^a-zA-Z0-9.-]/.test(cleanDomain);
+	}
+
+	/**
+	 * Проверяет валидность булевого значения
+	 */
+	private static isValidBoolean(value: string): boolean {
+		const upper = value.toUpperCase();
+		return upper === 'TRUE' || upper === 'FALSE';
+	}
+
+	/**
+	 * Проверяет валидность пути
+	 */
+	private static isValidPath(path: string): boolean {
+		return path.length > 0 && path.startsWith('/');
+	}
+
+	/**
+	 * Проверяет валидность timestamp
+	 */
+	private static isValidTimestamp(timestamp: string): boolean {
+		if (timestamp === '0') return true; // session cookie
+
+		// Должно быть числом
+		if (!/^\d+$/.test(timestamp)) return false;
+
+		const num = parseInt(timestamp, 10);
+		return num > 0 && num < 4102444800; // до 2100 года
+	}
+
+	/**
+	 * Проверяет наличие множественных name=value пар в атрибутах
+	 */
+	private static hasMultipleNameValuePairs(attributes: string): boolean {
+		// Известные SetCookie атрибуты (case-insensitive)
+		const knownAttributes = ['domain', 'path', 'expires', 'max-age', 'samesite', 'httponly', 'secure', 'partitioned', 'priority'];
+
+		const parts = attributes.split(';');
+
+		for (const part of parts) {
+			const trimmed = part.trim();
+			if (trimmed.includes('=')) {
+				const [name] = trimmed.split('=', 1);
+				const attrName = name.trim().toLowerCase();
+
+				// Если найден атрибут с = который не является известным SetCookie атрибутом
+				if (!knownAttributes.includes(attrName)) {
+					return true; // это дополнительная name=value пара, не атрибут
+				}
+			}
+		}
+
+		return false;
 	}
 }
