@@ -43,11 +43,25 @@ export class CookieFormatDetector {
 				this.wasmHits++;
 				return wasmResult;
 			} else {
-				// WASM не распознал - сохраняем образец для анализа
+				// ДЕТАЛЬНАЯ ДИАГНОСТИКА КАЖДОГО FALLBACK:
 				this.fallbackHits++;
+
+				// Сохраняем ТОЧНУЮ строку (не обрезанную)
 				if (this.fallbackSamples.length < 10) {
-					this.fallbackSamples.push(trimmed.slice(0, 100)); // первые 100 символов
+					this.fallbackSamples.push(trimmed);
 				}
+
+				// ЛОГИРУЕМ первые несколько fallback:
+				if (this.fallbackHits <= 5) {
+					console.log(`FALLBACK #${this.fallbackHits}:`);
+					console.log(`  String: "${trimmed}"`);
+					console.log(`  Length: ${trimmed.length}`);
+					console.log(`  Bytes: [${Array.from(new TextEncoder().encode(trimmed)).slice(0, 20).join(',')}...]`);
+					console.log(`  First char: ${trimmed.charCodeAt(0)} ('${trimmed[0]}')`);
+					console.log(`  Last char: ${trimmed.charCodeAt(trimmed.length - 1)} ('${trimmed[trimmed.length - 1]}')`);
+					console.log('---');
+				}
+
 				return this.detectFallback(trimmed);
 			}
 		}

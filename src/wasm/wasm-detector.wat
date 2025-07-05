@@ -30,11 +30,6 @@
       (then (return (i32.const 0)))
     )
 
-	;; Защита от слишком длинных строк (>32KB)
-    (if (i32.gt_u (local.get $len) (i32.const 32768))
-      (then (return (i32.const 0)))
-    )
-
     ;; Получаем первый символ
     (local.set $firstChar (i32.load8_u (local.get $ptr)))
 
@@ -109,7 +104,7 @@
 
     ;; Оптимизированное сканирование для длинных строк
     ;; Ограничиваем анализ первыми 1000 символами для производительности
-    ;; (local.set $len (call $min (local.get $len) (i32.const 1000)))
+    (local.set $len (call $min (local.get $len) (i32.const 1000)))
 
     ;; Сканирование строки для подсчета структуры с bounds checking
     (block $scan_done
@@ -421,6 +416,8 @@
 
   ;; Функция для полной валидации известных атрибутов
   (func $validateKnownAttribute (param $ptr i32) (param $start i32) (param $len i32) (result i32)
+	(local $char i32)
+
     ;; Domain (6 символов)
     (if (i32.eq (local.get $len) (i32.const 6))
       (then
@@ -727,6 +724,95 @@
                   (i32.or ;; e|E
                     (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 7)))) (i32.const 101))
                     (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 7)))) (i32.const 69))
+                  )
+                )
+              )
+            )
+          (then (return (i32.const 1)))
+        )
+      )
+    )
+
+	;; Partitioned (11 символов)
+    (if (i32.eq (local.get $len) (i32.const 11))
+      (then
+        ;; Простая проверка первых и последних символов для "Partitioned"
+        (if (i32.and
+              (i32.or ;; P|p
+                (i32.eq (i32.load8_u (i32.add (local.get $ptr) (local.get $start))) (i32.const 80))
+                (i32.eq (i32.load8_u (i32.add (local.get $ptr) (local.get $start))) (i32.const 112))
+              )
+              (i32.or ;; d|D (последний символ)
+                (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 10)))) (i32.const 100))
+                (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 10)))) (i32.const 68))
+              )
+            )
+          (then (return (i32.const 1)))
+        )
+      )
+    )
+
+    ;; Простая эвристика: для длинных атрибутов (>10 символов) принимаем как известные
+    ;; Это покроет редкие атрибуты без точной проверки
+    (if (i32.gt_u (local.get $len) (i32.const 10))
+      (then
+        ;; Проверяем что начинается с буквы (A-Z, a-z)
+        (local.set $char (i32.load8_u (i32.add (local.get $ptr) (local.get $start))))
+        (if (i32.or
+              (i32.and (i32.ge_u (local.get $char) (i32.const 65)) (i32.le_u (local.get $char) (i32.const 90))) ;; A-Z
+              (i32.and (i32.ge_u (local.get $char) (i32.const 97)) (i32.le_u (local.get $char) (i32.const 122))) ;; a-z
+            )
+          (then (return (i32.const 1))) ;; Принимаем как известный атрибут
+        )
+      )
+    )
+
+	;; Priority (8 символов)
+    (if (i32.eq (local.get $len) (i32.const 8))
+      (then
+        ;; Проверка на "Priority" (case insensitive)
+        (if (i32.and
+              (i32.and
+                (i32.and
+                  (i32.or ;; P|p
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (local.get $start))) (i32.const 80))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (local.get $start))) (i32.const 112))
+                  )
+                  (i32.or ;; r|R
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 1)))) (i32.const 114))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 1)))) (i32.const 82))
+                  )
+                )
+                (i32.and
+                  (i32.or ;; i|I
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 2)))) (i32.const 105))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 2)))) (i32.const 73))
+                  )
+                  (i32.or ;; o|O
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 3)))) (i32.const 111))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 3)))) (i32.const 79))
+                  )
+                )
+              )
+              (i32.and
+                (i32.and
+                  (i32.or ;; r|R
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 4)))) (i32.const 114))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 4)))) (i32.const 82))
+                  )
+                  (i32.or ;; i|I
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 5)))) (i32.const 105))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 5)))) (i32.const 73))
+                  )
+                )
+                (i32.and
+                  (i32.or ;; t|T
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 6)))) (i32.const 116))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 6)))) (i32.const 84))
+                  )
+                  (i32.or ;; y|Y
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 7)))) (i32.const 121))
+                    (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $start) (i32.const 7)))) (i32.const 89))
                   )
                 )
               )

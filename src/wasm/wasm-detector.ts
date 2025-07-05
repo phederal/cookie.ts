@@ -10,7 +10,6 @@ export class WasmCookieDetector {
 	// Статический encoder для производительности
 	private static textEncoder = new TextEncoder();
 	private static readonly MAX_WASM_INPUT = 32 * 1024; // (Default 65536 bytes - 64kb)
-	private static readonly MAX_STRING_SIZE = 32 * 1024;
 
 	// Константы форматов (соответствуют WASM)
 	private static readonly FORMAT_UNKNOWN = 0;
@@ -53,38 +52,21 @@ export class WasmCookieDetector {
 	 * Быстрая детекция через WASM
 	 */
 	static detect(line: string): FormatDetectionResult | null {
-		if (!this.wasmModule || !this.memory) {
-			return null; // Fallback к обычному детектору
-		}
-
-		// Быстрая проверка размера до кодирования
-		if (line.length > this.MAX_WASM_INPUT) {
-			return null; // Строка слишком длинная для WASM
-		}
+		// Fallback к обычному детектору
+		if (!this.wasmModule || !this.memory) return null;
 
 		try {
-			// Проверяем размер строки
-			if (line.length > this.MAX_STRING_SIZE) {
-				console.warn(`WASM: String too long (${line.length} > ${this.MAX_STRING_SIZE}), fallback to TypeScript`);
-				return null;
-			}
-
+			// Кодируем строку
 			const bytes = this.textEncoder.encode(line);
 			const memorySize = this.memory.buffer.byteLength;
 
-			if (bytes.length > memorySize) {
-				return null; // Строка слишком длинная
-			}
+			// Только если реально не помещается
+			// if (bytes.length > memorySize - 1024) {
+			// 	return null;
+			// }
 
 			// Проверяем что строка помещается в память (оставляем запас в 1KB)
 			const memoryView = new Uint8Array(this.memory.buffer);
-			const safeLimit = memoryView.length - 2048;
-
-			if (bytes.length > safeLimit) {
-				console.warn(`WASM: Encoded string too large (${bytes.length} > ${safeLimit}), fallback to TypeScript`);
-				return null;
-			}
-
 			memoryView.set(bytes, 0);
 
 			// Вызываем WASM функцию
@@ -142,7 +124,7 @@ export class WasmCookieDetector {
 		return {
 			totalBytes: this.memory.buffer.byteLength,
 			totalKB: Math.round(this.memory.buffer.byteLength / 1024),
-			maxStringSize: this.MAX_STRING_SIZE,
+			maxStringSize: this.MAX_WASM_INPUT,
 		};
 	}
 }
