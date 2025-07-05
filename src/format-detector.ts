@@ -1,11 +1,24 @@
 import { CookieFormat } from './types';
 import type { FormatDetectionResult } from './types';
+import { WasmCookieDetector } from './wasm/wasm-detector';
 
 /**
  * Строгий детектор форматов cookies с нулевым уровнем ложных срабатываний
  * Использует структурный анализ вместо нечеткой логики scoring
  */
 export class CookieFormatDetector {
+	private static wasmInitialized = false;
+
+	/**
+	 * Инициализация (вызывать при старте приложения)
+	 */
+	static async init(): Promise<void> {
+		if (!this.wasmInitialized) {
+			await WasmCookieDetector.init();
+			this.wasmInitialized = true;
+		}
+	}
+
 	/**
 	 * Определяет формат cookie строки с максимальной точностью
 	 * @param line Строка для анализа
@@ -14,6 +27,14 @@ export class CookieFormatDetector {
 	static detect(line: string): FormatDetectionResult | null {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) return null;
+
+		// Быстрый путь через WASM (если доступен)
+		if (WasmCookieDetector.isAvailable()) {
+			const wasmResult = WasmCookieDetector.fastDetect(trimmed);
+			if (wasmResult) {
+				return wasmResult;
+			}
+		}
 
 		// Быстрое исключение комментариев
 		if (this.isComment(trimmed)) return null;
@@ -343,11 +364,40 @@ export class CookieFormatDetector {
 
 		// Специальные случаи
 		if (domain === 'localhost' || domain.startsWith('localhost:')) return true;
-		if (/^\d+\.\d+\.\d+\.\d+$/.test(domain)) return true; // IP адрес
+
+		// IP адрес проверка без regex
+		if (this.isIPAddress(domain)) return true;
 
 		// Обычные домены должны содержать точку
 		const cleanDomain = domain.startsWith('.') ? domain.slice(1) : domain;
-		return cleanDomain.length > 0 && cleanDomain.includes('.') && !/[^a-zA-Z0-9.-]/.test(cleanDomain);
+		return cleanDomain.length > 0 && cleanDomain.includes('.') && this.isValidDomainChars(cleanDomain);
+	}
+
+	private static isIPAddress(domain: string): boolean {
+		const parts = domain.split('.');
+		if (parts.length !== 4) return false;
+
+		for (const part of parts) {
+			if (part.length === 0) return false;
+			for (let i = 0; i < part.length; i++) {
+				const code = part.charCodeAt(i);
+				if (code < 0x30 || code > 0x39) return false; // не цифра
+			}
+			const num = parseInt(part, 10);
+			if (num > 255) return false;
+		}
+		return true;
+	}
+
+	private static isValidDomainChars(domain: string): boolean {
+		for (let i = 0; i < domain.length; i++) {
+			const code = domain.charCodeAt(i);
+			// a-z, A-Z, 0-9, '.', '-'
+			if (!((code >= 0x61 && code <= 0x7a) || (code >= 0x41 && code <= 0x5a) || (code >= 0x30 && code <= 0x39) || code === 0x2e || code === 0x2d)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -371,8 +421,14 @@ export class CookieFormatDetector {
 	private static isValidTimestamp(timestamp: string): boolean {
 		if (timestamp === '0') return true; // session cookie
 
-		// Должно быть числом
-		if (!/^\d+$/.test(timestamp)) return false;
+		// // Должно быть числом
+		// if (!/^\d+$/.test(timestamp)) return false;
+
+		// Проверка что все символы - цифры
+		for (let i = 0; i < timestamp.length; i++) {
+			const code = timestamp.charCodeAt(i);
+			if (code < 0x30 || code > 0x39) return false; // не цифра
+		}
 
 		const num = parseInt(timestamp, 10);
 		return num > 0 && num < 4102444800; // до 2100 года
@@ -392,13 +448,21 @@ export class CookieFormatDetector {
 				const equalIndex = trimmed.indexOf('=');
 				const name = trimmed.slice(0, equalIndex).trim().toLowerCase();
 
-				// ИСПРАВЛЕНИЕ: Expires может содержать даты с запятыми - это нормально
+				// ИСПРАВЛЕНИЕ: Не считаем множественными если это известный атрибут
 				if (!knownAttributes.includes(name)) {
-					return true;
+					// Дополнительная проверка: если имя не выглядит как cookie name
+					if (this.looksLikeCookieName(name)) {
+						return true; // это дополнительная cookie пара
+					}
 				}
 			}
 		}
 
 		return false;
+	}
+
+	private static looksLikeCookieName(name: string): boolean {
+		// Простые имена вроде cookie1, cookie2, session, csrf и т.д.
+		return name.length > 0 && name.length < 50 && /^[a-zA-Z0-9_-]+$/.test(name);
 	}
 }
