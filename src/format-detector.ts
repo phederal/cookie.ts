@@ -24,10 +24,17 @@ export class CookieFormatDetector {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) return null;
 
+		// Lazy WASM init
+		if (!this.wasmInitialized) {
+			WasmCookieDetector.init().catch(() => {}); // async без await
+			this.wasmInitialized = true;
+		}
+
 		// Быстрый путь через WASM (если доступен)
 		if (WasmCookieDetector.isAvailable()) {
 			const wasmResult = WasmCookieDetector.detect(trimmed);
 			if (wasmResult) return wasmResult;
+			// else fallback...
 		}
 
 		// Быстрое исключение комментариев
