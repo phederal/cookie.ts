@@ -19,27 +19,19 @@ export class FileExtractor {
 	}
 
 	private static extractInlineJson(content: string, results: FormatDetectionResult[], seenContent: Set<string>): void {
+		// console.log(
+		// 	'Content lines:',
+		// 	content.split(/\r?\n/).map((line) => line.trim()),
+		// );
+
 		// Ищем JSON объекты и массивы в любом месте текста
-		const jsonRegex = /[{\[][^{}\[\]]*(?:[{}\[\]][^{}\[\]]*)*[}\]]/g;
-		let match;
+		const lines = content.split(/\r?\n/);
 
-		while ((match = jsonRegex.exec(content)) !== null) {
-			try {
-				JSON.parse(match[0]);
-
-				// Проверяем дублирование
-				if (!seenContent.has(match[0])) {
-					const detection = CookieFormatDetector.detectFormat(match[0]);
-					if (detection) {
-						seenContent.add(match[0]);
-						results.push({
-							...detection,
-							lines: [match[0]],
-						});
-					}
-				}
-			} catch {
-				// Не валидный JSON, пропускаем
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+				this.tryParseJson(trimmed, results, seenContent);
 			}
 		}
 	}
@@ -132,7 +124,7 @@ export class FileExtractor {
 
 			// Проверяем дублирование
 			if (!seenContent.has(trimmed)) {
-				const detection = CookieFormatDetector.detectFormat(trimmed);
+				const detection = CookieFormatDetector.detect(trimmed);
 				if (detection && (detection.format === 'set-cookie' || detection.format === 'netscape')) {
 					seenContent.add(trimmed);
 					results.push({
@@ -150,7 +142,7 @@ export class FileExtractor {
 
 			// Проверяем дублирование
 			if (!seenContent.has(jsonString)) {
-				const detection = CookieFormatDetector.detectFormat(jsonString);
+				const detection = CookieFormatDetector.detect(jsonString);
 				if (detection) {
 					seenContent.add(jsonString);
 					results.push({
