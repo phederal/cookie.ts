@@ -7,6 +7,10 @@ export class WasmCookieDetector {
 	private static isInitializing = false;
 	private static initPromise: Promise<void> | null = null;
 
+	// Статический encoder для производительности
+	private static textEncoder = new TextEncoder();
+	private static readonly MAX_WASM_INPUT = 65536; // (Default 65536 bytes - 64kb)
+
 	// Константы форматов (соответствуют WASM)
 	private static readonly FORMAT_UNKNOWN = 0;
 	private static readonly FORMAT_JSON = 1;
@@ -52,17 +56,21 @@ export class WasmCookieDetector {
 			return null; // Fallback к обычному детектору
 		}
 
-		try {
-			const encoder = new TextEncoder();
-			const bytes = encoder.encode(line);
+		// Быстрая проверка размера до кодирования
+		if (line.length > this.MAX_WASM_INPUT) {
+			return null; // Строка слишком длинная для WASM
+		}
 
-			// Проверяем что строка помещается в память
-			const memoryView = new Uint8Array(this.memory.buffer);
-			if (bytes.length > memoryView.length) {
+		try {
+			const bytes = this.textEncoder.encode(line);
+			const memorySize = this.memory.buffer.byteLength;
+
+			if (bytes.length > memorySize) {
 				return null; // Строка слишком длинная
 			}
 
 			// Записываем данные в WASM память
+			const memoryView = new Uint8Array(this.memory.buffer);
 			memoryView.set(bytes, 0);
 
 			// Вызываем WASM функцию
@@ -71,7 +79,10 @@ export class WasmCookieDetector {
 
 			return this.mapWasmResult(result, line);
 		} catch (error) {
-			console.warn('WASM детекция failed:', error);
+			// В production убираем console.warn для производительности
+			if (process.env.NODE_ENV === 'development') {
+				console.warn('WASM detection failed:', error);
+			}
 			return null;
 		}
 	}
@@ -106,5 +117,15 @@ export class WasmCookieDetector {
 	 */
 	static isAvailable(): boolean {
 		return this.wasmModule !== null;
+	}
+
+	/**
+	 * Получение статистики использования WASM (для отладки)
+	 */
+	static getStats(): { memorySize: number; isInitialized: boolean } {
+		return {
+			memorySize: this.memory ? this.memory.buffer.byteLength : 0,
+			isInitialized: this.wasmModule !== null,
+		};
 	}
 }
