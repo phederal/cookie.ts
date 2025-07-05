@@ -9,7 +9,7 @@ export class WasmCookieDetector {
 
 	// Статический encoder для производительности
 	private static textEncoder = new TextEncoder();
-	private static readonly MAX_WASM_INPUT = 32 * 1024; // (Default 65536 bytes - 64kb)
+	private static readonly MAX_WASM_INPUT = 64 * 1024; // (Default 65536 bytes - 64kb)
 
 	// Константы форматов (соответствуют WASM)
 	private static readonly FORMAT_UNKNOWN = 0;
@@ -61,9 +61,9 @@ export class WasmCookieDetector {
 			const memorySize = this.memory.buffer.byteLength;
 
 			// Только если реально не помещается
-			// if (bytes.length > memorySize - 1024) {
-			// 	return null;
-			// }
+			if (bytes.length > memorySize - 1024) {
+				return null;
+			}
 
 			// Проверяем что строка помещается в память (оставляем запас в 1KB)
 			const memoryView = new Uint8Array(this.memory.buffer);
