@@ -16,17 +16,3 @@ export { CookieValidator } from './cookie-validator';
 export { CookieFormatDetector } from './format-detector';
 export { CookieJar } from './cookiejar';
 export { Cookie } from './cookie';
-
-// Quick usage example
-/**
- * @example
- * ```typescript
- * import { CookieParser } from 'cookie-parser';
- *
- * const content = `sessionid=abc123; Domain=example.com; Path=/; Secure`;
- * const parsed = CookieParser.parse(content);
- *
- * console.log(`Found ${parsed.cookies.length} valid cookies`);
- * console.log('Cookies:', parsed.cookies);
- * ```
- */
