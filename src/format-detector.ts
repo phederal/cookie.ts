@@ -2,17 +2,13 @@ import { CookieFormat } from './types';
 import type { FormatDetectionResult } from './types';
 import { WasmCookieDetector } from './wasm/wasm-detector';
 
-/**
- * Строгий детектор форматов cookies с нулевым уровнем ложных срабатываний
- * Использует структурный анализ вместо нечеткой логики scoring
- */
 export class CookieFormatDetector {
 	private static wasmInitialized = false;
 
 	/**
 	 * Инициализация (вызывать при старте приложения)
 	 */
-	static async init(): Promise<void> {
+	static async wasm(): Promise<void> {
 		if (!this.wasmInitialized) {
 			await WasmCookieDetector.init();
 			this.wasmInitialized = true;
@@ -30,10 +26,8 @@ export class CookieFormatDetector {
 
 		// Быстрый путь через WASM (если доступен)
 		if (WasmCookieDetector.isAvailable()) {
-			const wasmResult = WasmCookieDetector.fastDetect(trimmed);
-			if (wasmResult) {
-				return wasmResult;
-			}
+			const wasmResult = WasmCookieDetector.detect(trimmed);
+			if (wasmResult) return wasmResult;
 		}
 
 		// Быстрое исключение комментариев
@@ -273,7 +267,6 @@ export class CookieFormatDetector {
 		// JSON уже проверен в isValidJsonStructure
 		return {
 			format: CookieFormat.JSON,
-			confidence: 1.0,
 			lines: [line],
 		};
 	}
@@ -305,7 +298,6 @@ export class CookieFormatDetector {
 
 		return {
 			format: CookieFormat.NETSCAPE,
-			confidence: 1.0,
 			lines: [line],
 		};
 	}
@@ -327,7 +319,6 @@ export class CookieFormatDetector {
 
 		return {
 			format: CookieFormat.SET_COOKIE,
-			confidence: 1.0,
 			lines: [line],
 		};
 	}
