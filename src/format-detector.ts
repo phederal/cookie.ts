@@ -4,6 +4,12 @@ import { WasmCookieDetector } from './wasm/wasm-detector';
 
 export class CookieFormatDetector {
 	private static wasmInitialized = false;
+	private static wasmAvailable = false;
+
+	// Статистика для отладки
+	private static wasmHits = 0;
+	private static fallbackHits = 0;
+	private static fallbackSamples: string[] = [];
 
 	/**
 	 * Инициализация (вызывать при старте приложения)
@@ -12,6 +18,7 @@ export class CookieFormatDetector {
 		if (!this.wasmInitialized) {
 			await WasmCookieDetector.init();
 			this.wasmInitialized = true;
+			this.wasmAvailable = WasmCookieDetector.isAvailable();
 		}
 	}
 
@@ -24,28 +31,69 @@ export class CookieFormatDetector {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) return null;
 
-		// Lazy WASM init
-		if (!this.wasmInitialized) {
-			WasmCookieDetector.init().catch(() => {}); // async без await
-			this.wasmInitialized = true;
+		// Если WASM инициализирован - проверяем его доступность
+		if (this.wasmInitialized && !this.wasmAvailable) {
+			this.wasmAvailable = WasmCookieDetector.isAvailable();
 		}
 
-		// Быстрый путь через WASM (если доступен)
-		if (WasmCookieDetector.isAvailable()) {
+		// WASM путь (если доступен)
+		if (this.wasmAvailable) {
 			const wasmResult = WasmCookieDetector.detect(trimmed);
-			if (wasmResult) return wasmResult;
-			// else fallback...
+			if (wasmResult) {
+				this.wasmHits++;
+				return wasmResult;
+			} else {
+				// WASM не распознал - сохраняем образец для анализа
+				this.fallbackHits++;
+				if (this.fallbackSamples.length < 10) {
+					this.fallbackSamples.push(trimmed.slice(0, 100)); // первые 100 символов
+				}
+				return this.detectFallback(trimmed);
+			}
 		}
 
+		// TypeScript fallback (если WASM недоступен)
+		this.fallbackHits++;
+		return this.detectFallback(trimmed);
+	}
+
+	/**
+	 * Статистика использования WASM vs fallback
+	 */
+	static getStats() {
+		const total = this.wasmHits + this.fallbackHits;
+		return {
+			wasmHits: this.wasmHits,
+			fallbackHits: this.fallbackHits,
+			total,
+			wasmPercentage: total > 0 ? ((this.wasmHits / total) * 100).toFixed(1) : '0',
+			wasmAvailable: this.wasmAvailable,
+			fallbackSamples: this.fallbackSamples,
+		};
+	}
+
+	/**
+	 * Сброс статистики
+	 */
+	static resetStats() {
+		this.wasmHits = 0;
+		this.fallbackHits = 0;
+		this.fallbackSamples = [];
+	}
+
+	/**
+	 * TypeScript fallback для случаев когда WASM недоступен
+	 */
+	private static detectFallback(line: string): FormatDetectionResult | null {
 		// Быстрое исключение комментариев
-		if (this.isComment(trimmed)) return null;
+		if (this.isComment(line)) return null;
 
 		// Структурное определение формата
-		const format = this.detectByStructure(trimmed);
+		const format = this.detectByStructure(line);
 		if (!format) return null;
 
 		// Строгая валидация соответствия формату
-		return this.validateFormat(trimmed, format);
+		return this.validateFormat(line, format);
 	}
 
 	/**
@@ -418,9 +466,6 @@ export class CookieFormatDetector {
 	 */
 	private static isValidTimestamp(timestamp: string): boolean {
 		if (timestamp === '0') return true; // session cookie
-
-		// // Должно быть числом
-		// if (!/^\d+$/.test(timestamp)) return false;
 
 		// Проверка что все символы - цифры
 		for (let i = 0; i < timestamp.length; i++) {

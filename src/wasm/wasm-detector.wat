@@ -1,5 +1,5 @@
 (module
-  (memory (export "memory") 1)
+  (memory (export "memory") 4)
 
   ;; Быстрая детекция формата cookie с исправленной логикой и bounds checking
   (func $detectFormat (param $ptr i32) (param $len i32) (result i32)
@@ -22,11 +22,16 @@
     (local $nameChar i32)
     (local $consecutiveSpaces i32)
 
-    ;; Bounds checking: проверка на пустую строку и максимальный размер
+    ;; Проверка на пустую строку и максимальный размер
     (if (i32.or
           (i32.eq (local.get $len) (i32.const 0))
           (i32.gt_u (local.get $len) (i32.const 65536))
         )
+      (then (return (i32.const 0)))
+    )
+
+	;; Защита от слишком длинных строк (>32KB)
+    (if (i32.gt_u (local.get $len) (i32.const 32768))
       (then (return (i32.const 0)))
     )
 
@@ -64,7 +69,7 @@
       )
     )
 
-    ;; Обновляем последний символ с bounds checking
+    ;; Обновляем последний символ
     (if (i32.gt_u (local.get $len) (i32.const 0))
       (then
         (local.set $lastChar (i32.load8_u (i32.add (local.get $ptr) (i32.sub (local.get $len) (i32.const 1)))))
@@ -101,6 +106,10 @@
     (local.set $firstEqualPos (i32.const -1))
     (local.set $booleanFieldsFound (i32.const 0))
     (local.set $consecutiveSpaces (i32.const 0))
+
+    ;; Оптимизированное сканирование для длинных строк
+    ;; Ограничиваем анализ первыми 1000 символами для производительности
+    ;; (local.set $len (call $min (local.get $len) (i32.const 1000)))
 
     ;; Сканирование строки для подсчета структуры с bounds checking
     (block $scan_done
@@ -320,6 +329,14 @@
 
     ;; По умолчанию - неизвестный формат
     (return (i32.const 0))
+  )
+
+  ;; Вспомогательная функция: минимум из двух значений
+  (func $min (param $a i32) (param $b i32) (result i32)
+    (if (result i32) (i32.lt_u (local.get $a) (local.get $b))
+      (then (local.get $a))
+      (else (local.get $b))
+    )
   )
 
   ;; Функция для проверки множественных cookies с полной валидацией атрибутов

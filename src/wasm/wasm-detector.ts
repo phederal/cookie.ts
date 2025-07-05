@@ -9,7 +9,8 @@ export class WasmCookieDetector {
 
 	// Статический encoder для производительности
 	private static textEncoder = new TextEncoder();
-	private static readonly MAX_WASM_INPUT = 65536; // (Default 65536 bytes - 64kb)
+	private static readonly MAX_WASM_INPUT = 32 * 1024; // (Default 65536 bytes - 64kb)
+	private static readonly MAX_STRING_SIZE = 32 * 1024;
 
 	// Константы форматов (соответствуют WASM)
 	private static readonly FORMAT_UNKNOWN = 0;
@@ -62,6 +63,12 @@ export class WasmCookieDetector {
 		}
 
 		try {
+			// Проверяем размер строки
+			if (line.length > this.MAX_STRING_SIZE) {
+				console.warn(`WASM: String too long (${line.length} > ${this.MAX_STRING_SIZE}), fallback to TypeScript`);
+				return null;
+			}
+
 			const bytes = this.textEncoder.encode(line);
 			const memorySize = this.memory.buffer.byteLength;
 
@@ -69,8 +76,15 @@ export class WasmCookieDetector {
 				return null; // Строка слишком длинная
 			}
 
-			// Записываем данные в WASM память
+			// Проверяем что строка помещается в память (оставляем запас в 1KB)
 			const memoryView = new Uint8Array(this.memory.buffer);
+			const safeLimit = memoryView.length - 2048;
+
+			if (bytes.length > safeLimit) {
+				console.warn(`WASM: Encoded string too large (${bytes.length} > ${safeLimit}), fallback to TypeScript`);
+				return null;
+			}
+
 			memoryView.set(bytes, 0);
 
 			// Вызываем WASM функцию
@@ -120,12 +134,15 @@ export class WasmCookieDetector {
 	}
 
 	/**
-	 * Получение статистики использования WASM (для отладки)
+	 * Получить информацию о памяти
 	 */
-	static getStats(): { memorySize: number; isInitialized: boolean } {
+	static getMemoryInfo() {
+		if (!this.memory) return null;
+
 		return {
-			memorySize: this.memory ? this.memory.buffer.byteLength : 0,
-			isInitialized: this.wasmModule !== null,
+			totalBytes: this.memory.buffer.byteLength,
+			totalKB: Math.round(this.memory.buffer.byteLength / 1024),
+			maxStringSize: this.MAX_STRING_SIZE,
 		};
 	}
 }
